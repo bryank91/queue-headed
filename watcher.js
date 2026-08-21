@@ -1,23 +1,29 @@
 #!/usr/bin/env node
 /**
- * Toymate queue watcher — Cloudflare Waiting Room edition, multi-profile.
+ * queue-headed — multi-profile headed-browser watcher for virtual queues.
  *
- * Toymate uses TWO queue systems layered together:
+ * Supports any site that uses one or both of these queue systems:
  *   1. Cloudflare Waiting Room — virtual queue Cloudflare runs in front of the
  *      site when traffic spikes. Title is "Waiting Room powered by Cloudflare",
  *      body says "You are now in line." with an ETA. Page auto-refreshes; you
  *      don't click anything. Cloudflare redirects to the real site when it's
  *      your turn.
- *   2. EQL (runfair.com) — used on specific product drops (e.g. Pokémon cards)
- *      once you're past the Cloudflare gate. That's where "Enter launch" lives.
+ *   2. EQL (runfair.com / *.runfair.com) — used on specific product drops
+ *      (Pokémon cards, sneakers, etc.) once you're past the Cloudflare gate.
+ *      That's where the "Enter launch" button lives.
+ *
+ * Originally built for Toymate, but the startUrl is fully configurable and the
+ * detection patterns are easy to extend. See the STATES object below to add
+ * patterns for other queue systems (Queue-it, custom waitrooms, etc.).
  *
  * What this watcher does:
  *   - Launches N parallel Chrome instances (default 3), each in its own profile,
- *     each holding its own Cloudflare queue ticket. More tickets = more chances
- *     to clear the gate during a high-traffic drop.
+ *     each holding its own queue ticket. More tickets = more chances to clear
+ *     the gate during a high-traffic drop.
  *   - For each profile, polls every few seconds. State machine:
- *        WAITING_ROOM  -> Cloudflare waiting room. Wait. Don't notify — the
- *                          user can see this on the browser window themselves.
+ *        WAITING_ROOM  -> Cloudflare waiting room (or equivalent). Wait. Don't
+ *                          notify — the user can see this on the browser window
+ *                          themselves.
  *        THROUGH       -> Title changed. You're in. Notify (unless the user
  *                          is already looking at the browser), open the page,
  *                          and (if it's an EQL drop page) auto-click Enter.
@@ -31,10 +37,11 @@
  *     see the state change yourself and don't need a ping.
  *
  * Run:
- *   node watcher.js
+ *   node watcher.js                       # uses CONFIG.startUrl default
+ *   node watcher.js https://example.com   # override at the command line
  *
- * Stop with Ctrl-C. Don't close individual Chrome windows while they're in the
- * Cloudflare waiting room — that loses that profile's place in line.
+ * Stop with Ctrl-C. Don't close individual Chrome windows while they're in a
+ * waiting room — that loses that profile's place in line.
  */
 
 const { chromium } = require('playwright');
@@ -43,8 +50,23 @@ const path = require('path');
 const fs = require('fs');
 
 // ---------- config ----------
+//
+// The two ways to point the watcher at a queue site:
+//
+//   1. Edit CONFIG.startUrl below (persistent default).
+//   2. Pass it on the command line, which overrides the default:
+//        node watcher.js https://example.com
+//
+const CLI_URL = process.argv[2];
 const CONFIG = {
-  startUrl: 'https://toymate.com.au/',
+  // ⬇️  The site to watch. Any URL that uses a Cloudflare Waiting Room and/or
+  //     EQL drop page works out of the box. Examples:
+  //       'https://toymate.com.au/'
+  //       'https://www.footlocker.com.au/launch/'
+  //       'https://example.com/raffle'
+  //     CLI arg overrides this. If your site uses a different queue/raffle
+  //     system, you'll need to add detection patterns to STATES below.
+  startUrl: CLI_URL || 'https://toymate.com.au/',
 
   // Number of parallel Chrome profiles to run. Each holds its own queue
   // ticket. Set to 1 if you only want one. Higher = more chances, more CPU.
@@ -52,7 +74,7 @@ const CONFIG = {
 
   // Base directory under which per-profile Chrome data dirs are created.
   // Each profile gets:   <base>/profile-<index>/
-  profileBaseDir: path.join(process.env.HOME, 'toymate-watcher', 'profiles'),
+  profileBaseDir: path.join(process.env.HOME, 'queue-headed', 'profiles'),
 
   // Poll cadence. Cloudflare refreshes the waiting room every ~30s; this
   // is more frequent so we catch the moment we get through quickly.
@@ -78,6 +100,10 @@ const CONFIG = {
   // profiles' Chrome windows (their tickets are now redundant). Set to
   // false to keep them all open as backups.
   closeOthersOnClear: false,
+
+  // Notification subtitle (e.g. the small grey text in macOS Notification
+  // Center). Change if you're running this for a brand other than "queue-headed".
+  notifySubtitle: 'Queue Watcher',
 
   verbose: true,
 };
@@ -134,12 +160,12 @@ function notify(title, body, opts = {}) {
   const safe = (s) => String(s).replace(/"/g, '\\"');
   try {
     execSync(
-      `osascript -e 'display notification "${safe(body)}" with title "${safe(title)}" subtitle "Toymate Watcher"'`,
+      `osascript -e 'display notification "${safe(body)}" with title "${safe(title)}" subtitle "${safe(CONFIG.notifySubtitle)}"'`,
       { stdio: 'ignore' }
     );
   } catch (_) { /* non-fatal */ }
   try { execSync('afplay /System/Library/Sounds/Glass.aiff', { stdio: 'ignore' }); }
-  catch (_) { try { execSync('say "Toymate update"', { stdio: 'ignore' }); } catch (__) {} }
+  catch (_) { try { execSync('say "queue update"', { stdio: 'ignore' }); } catch (__) {} }
 }
 
 function openInBrowser(url) {
@@ -311,7 +337,7 @@ async function runProfile(index, total) {
   for (let i = 0; i < CONFIG.profileCount; i++) {
     tasks.push(runProfile(i, CONFIG.profileCount).catch(e => {
       console.error(`[Profile ${i + 1}] fatal:`, e.message);
-      notify(`Toymate: profile ${i + 1} crashed`, String(e.message || e), false);
+      notify(`${CONFIG.notifySubtitle}: profile ${i + 1} crashed`, String(e.message || e), false);
     }));
   }
 
@@ -329,7 +355,7 @@ async function runProfile(index, total) {
   process.exit(0);
 })().catch((err) => {
   console.error('Fatal:', err);
-  notify('Toymate watcher crashed', String(err && err.message || err), false);
+  notify(`${CONFIG.notifySubtitle} crashed`, String(err && err.message || err), false);
   process.exit(1);
 });
 

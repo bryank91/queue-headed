@@ -1,7 +1,7 @@
 {
   "name": "queue-headed",
   "version": "1.0.0",
-  "description": "Headed-browser queue watcher with focus-aware macOS notifications. Originally built for Toymate's Cloudflare Waiting Room + EQL drop flow; configurable for any virtual-queue site.",
+  "description": "Multi-profile headed-browser watcher for virtual queues (Cloudflare Waiting Room, EQL, etc.) with focus-aware macOS notifications.",
   "main": "watcher.js",
   "scripts": {
     "start": "node watcher.js",
