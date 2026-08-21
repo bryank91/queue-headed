@@ -1,0 +1,30 @@
+# dependencies
+node_modules/
+
+# Playwright (if you ever install via npm instead of using channel: 'chrome')
+playwright-report/
+test-results/
+
+# Per-profile Chrome user-data directories. Each holds cookies, browsing
+# history, and a real Cloudflare queue ticket while a session is running —
+# do NOT commit these. Re-created automatically on first run.
+profiles/
+chrome-profile/
+
+# macOS
+.DS_Store
+
+# logs / temp
+*.log
+npm-debug.log*
+/tmp/
+
+# editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# env
+.env
+.env.local
