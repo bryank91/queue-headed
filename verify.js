@@ -1,18 +1,21 @@
 #!/usr/bin/env node
 /**
- * Quick inspector: opens a queue site in real Chrome and dumps what it sees.
- * Useful for debugging state detection before running the full watcher.
+ * Quick inspector for toymate.com.au — opens the site in real Chrome and
+ * dumps what it sees. Useful for debugging state detection before running the
+ * full watcher.
  *
- * Usage:
- *   node verify.js                            # uses CONFIG.startUrl
- *   node verify.js https://example.com        # override
+ * ⚠️  Like watcher.js, this might only work with toymate.com.au. The URL,
+ * locale, and timezone are hardcoded for Toymate.
+ *
+ * Run:
+ *   node verify.js
  */
 const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
 
-const URL = process.argv[2] || 'https://toymate.com.au/';
-const PROFILE_DIR = path.join(process.env.HOME, 'queue-headed', 'profiles', 'profile-verify');
+const URL          = 'https://toymate.com.au/';
+const PROFILE_DIR  = path.join(process.env.HOME, 'queue-headed', 'profiles', 'profile-verify');
 
 (async () => {
   fs.mkdirSync(PROFILE_DIR, { recursive: true });

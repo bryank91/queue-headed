@@ -1,44 +1,30 @@
 #!/usr/bin/env node
 /**
- * queue-headed — multi-profile headed-browser watcher for virtual queues.
+ * queue-headed — multi-profile headed-browser watcher for toymate.com.au's
+ * Cloudflare Waiting Room.
  *
- * Supports any site that uses one or both of these queue systems:
- *   1. Cloudflare Waiting Room — virtual queue Cloudflare runs in front of the
- *      site when traffic spikes. Title is "Waiting Room powered by Cloudflare",
- *      body says "You are now in line." with an ETA. Page auto-refreshes; you
- *      don't click anything. Cloudflare redirects to the real site when it's
- *      your turn.
- *   2. EQL (runfair.com / *.runfair.com) — used on specific product drops
- *      (Pokémon cards, sneakers, etc.) once you're past the Cloudflare gate.
- *      That's where the "Enter launch" button lives.
- *
- * Originally built for Toymate, but the startUrl is fully configurable and the
- * detection patterns are easy to extend. See the STATES object below to add
- * patterns for other queue systems (Queue-it, custom waitrooms, etc.).
+ * ⚠️  This script might only work with toymate.com.au.
+ * The Cloudflare detection patterns, the start URL, the browser locale, the
+ * timezone, and the Accept-Language header are all hardcoded for Toymate.
+ * The only knob you change at runtime is `profileCount` (the number of
+ * parallel Chrome instances — i.e. the number of queue tickets you want to
+ * hold). To point this at a different site, edit the constants at the top of
+ * the file.
  *
  * What this watcher does:
- *   - Launches N parallel Chrome instances (default 3), each in its own profile,
- *     each holding its own queue ticket. More tickets = more chances to clear
- *     the gate during a high-traffic drop.
+ *   - Launches N parallel Chrome instances, each in its own profile, each
+ *     holding its own Cloudflare queue ticket. More tickets = more chances
+ *     to clear the gate during a high-traffic drop.
  *   - For each profile, polls every few seconds. State machine:
- *        WAITING_ROOM  -> Cloudflare waiting room (or equivalent). Wait. Don't
- *                          notify — the user can see this on the browser window
- *                          themselves.
- *        THROUGH       -> Title changed. You're in. Notify (unless the user
- *                          is already looking at the browser), open the page,
- *                          and (if it's an EQL drop page) auto-click Enter.
- *        DROP_ENTERED  -> Entered an EQL drop. Wait for selection. Don't notify.
- *        SELECTED      -> "You're in" / purchase state. Notify (unless at the
- *                          browser), open, stop.
- *        NOT_SELECTED  -> Lost the raffle. Notify (unless at the browser), stop.
- *   - Notifications ONLY fire on the three "outcome" states (THROUGH /
- *     SELECTED / NOT_SELECTED). They are auto-suppressed whenever Google Chrome
- *     is the frontmost application — if you're already at the browser, you can
- *     see the state change yourself and don't need a ping.
+ *        WAITING_ROOM  -> Cloudflare waiting room. Wait. Don't notify — the
+ *                          user can see this on the browser window.
+ *        THROUGH       -> Title changed. You're past the gate. Notify (unless
+ *                          Chrome is already frontmost), open the page.
+ *   - Notifications ONLY fire on the "gate cleared" transition. WAITING_ROOM
+ *     is silent — you can see it on the browser window yourself.
  *
  * Run:
- *   node watcher.js                       # uses CONFIG.startUrl default
- *   node watcher.js https://example.com   # override at the command line
+ *   node watcher.js
  *
  * Stop with Ctrl-C. Don't close individual Chrome windows while they're in a
  * waiting room — that loses that profile's place in line.
@@ -49,93 +35,97 @@ const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-// ---------- config ----------
-//
-// The two ways to point the watcher at a queue site:
-//
-//   1. Edit CONFIG.startUrl below (persistent default).
-//   2. Pass it on the command line, which overrides the default:
-//        node watcher.js https://example.com
-//
-const CLI_URL = process.argv[2];
-const CONFIG = {
-  // ⬇️  The site to watch. Any URL that uses a Cloudflare Waiting Room and/or
-  //     EQL drop page works out of the box. Examples:
-  //       'https://toymate.com.au/'
-  //       'https://www.footlocker.com.au/launch/'
-  //       'https://example.com/raffle'
-  //     CLI arg overrides this. If your site uses a different queue/raffle
-  //     system, you'll need to add detection patterns to STATES below.
-  startUrl: CLI_URL || 'https://toymate.com.au/',
+// ============================================================
+// HARD-CODED SETTINGS — tuned for toymate.com.au.
+// To customize: edit this block. Nothing here is runtime-configurable.
+// ============================================================
+const HARD_CODED = {
+  // The site to watch.
+  startUrl:             'https://toymate.com.au/',
 
-  // Number of parallel Chrome profiles to run. Each holds its own queue
-  // ticket. Set to 1 if you only want one. Higher = more chances, more CPU.
-  profileCount: 3,
+  // Poll cadence (ms). Cloudflare refreshes the WR every ~30s; 4s polling
+  // catches the transition quickly without hammering the site.
+  pollIntervalMs:       4000,
 
-  // Base directory under which per-profile Chrome data dirs are created.
-  // Each profile gets:   <base>/profile-<index>/
-  profileBaseDir: path.join(process.env.HOME, 'queue-headed', 'profiles'),
+  // Base dir for per-profile Chrome data. Each profile gets
+  //   <base>/profile-<index>/
+  profileBaseDir:       path.join(process.env.HOME, 'queue-headed', 'profiles'),
 
-  // Poll cadence. Cloudflare refreshes the waiting room every ~30s; this
-  // is more frequent so we catch the moment we get through quickly.
-  pollIntervalMs: 4000,
+  // Stop the whole watcher after this many ms. 0 = forever.
+  maxRuntimeMs:         0,
 
-  // Suppress notifications when Google Chrome is the frontmost app. If you're
-  // already looking at the browser, you can see the page state and don't need
-  // a ping. Set to false to always notify regardless of focus.
+  // Open the cleared page in your default browser when a profile gets through.
+  openOnClear:          true,
+
+  // When a profile clears the gate, close the *other* profiles' Chrome
+  // windows (their tickets are now redundant).
+  closeOthersOnClear:   false,
+
+  // Skip notifications when Google Chrome is the frontmost app — if you're
+  // already looking at the browser, you can see the state change yourself.
   suppressWhenChromeFocused: true,
 
-  // If we land on an EQL page after clearing the gate, click the first
-  // "Enter launch" button we find.
-  autoEnterDrops: true,
+  // macOS notification subtitle (the small grey text).
+  notifySubtitle:       'Queue Watcher',
 
-  // Stop the whole watcher after this many ms (0 = forever).
-  maxRuntimeMs: 0,
+  // Terminal logging.
+  verbose:              true,
 
-  // Open the cleared page in your default browser when a profile gets
-  // through. Useful if you want to act on it from Safari/your main Chrome.
-  openOnClear: true,
+  // Browser locale + timezone + Accept-Language. Wrong values may cause CF
+  // to serve a different regional variant or look suspicious.
+  locale:               'en-AU',
+  timezoneId:           'Australia/Sydney',
+  acceptLanguage:       'en-AU,en;q=0.9',
 
-  // When a profile clears the gate, automatically close the *other*
-  // profiles' Chrome windows (their tickets are now redundant). Set to
-  // false to keep them all open as backups.
-  closeOthersOnClear: false,
+  // Which browser to launch. 'chrome' = Google Chrome (must be installed).
+  // For tests on machines without Chrome, the e2e test overrides this.
+  channel:              'chrome',
 
-  // Notification subtitle (e.g. the small grey text in macOS Notification
-  // Center). Change if you're running this for a brand other than "queue-headed".
-  notifySubtitle: 'Queue Watcher',
+  // Headed (default) vs headless. Headed is required so the user can see the
+  // browser window. Headless is used by the e2e test.
+  headless:             false,
 
-  verbose: true,
+  // Test hooks — null in production. The e2e test sets these to capture
+  // notifications and state transitions.
+  notifyHook:           null,
+  stateChangeHook:      null,
 };
 
-// ---------- state detection ----------
+// ============================================================
+// USER CONFIG — the one knob.
+// ============================================================
+const CONFIG = {
+  // Number of parallel Chrome profiles. Each holds its own queue ticket.
+  // 1 = single profile. Higher = more chances, more CPU/RAM.
+  profileCount:         3,
+};
+
+// ============================================================
+// TEST INFRASTRUCTURE — used by the e2e test only. Leave as-is in production.
+// ============================================================
+// Each field, if non-null, overrides the corresponding HARD_CODED value. In
+// production code path these are always null and HARD_CODED values are used.
+const TEST = Object.fromEntries(Object.keys(HARD_CODED).map(k => [k, null]));
+
+// Effective value: TEST override if set, otherwise the hardcoded default.
+function cfg(key) { return TEST[key] !== null ? TEST[key] : HARD_CODED[key]; }
+
+// ============================================================
+// STATE DETECTION — Cloudflare Waiting Room regexes.
+// ============================================================
 const STATES = {
   CLOUDFLARE_TITLE: /waiting room powered by cloudflare/i,
   CLOUDFLARE_BODY:  /you are now in line|estimated wait time is|virtual queue/i,
-  EQL_ENTERED:      /entry\s*submitted|you('?re|\s*are)\s*(in\s*the\s*queue|in!)|waiting\s*for\s*(selection|the\s*draw)|good\s*luck/i,
-  EQL_SELECTED:     /you('?re|\s*are)\s*(in|through|selected|chosen)|proceed\s*to\s*(checkout|purchase|buy)|complete\s*(your\s*)?order|buy\s*now/i,
-  EQL_NOT_SELECTED: /not\s*selected|didn['’]t\s*(get|make)\s*it|unfortunately|try\s*again\s*next\s*time/i,
 };
 
-const EQL_ENTER_SELECTORS = [
-  'button:has-text("Enter launch")',
-  'button:has-text("Enter the launch")',
-  'button:has-text("Enter now")',
-  'button:has-text("Join queue")',
-  'button:has-text("Enter queue")',
-  'button:has-text("Enter")',
-  'a:has-text("Enter launch")',
-  'a:has-text("Enter now")',
-  '[data-testid="enter-launch"]',
-  '[data-testid*="enter"]',
-];
+// ============================================================
+// macOS HELPERS
+// ============================================================
 
-// ---------- macOS helpers ----------
-
-// Returns true if Google Chrome is the frontmost application. Used to suppress
+// True if Google Chrome is the frontmost application. Used to suppress
 // notifications when the user is already looking at the browser window.
 function isChromeFocused() {
-  if (!CONFIG.suppressWhenChromeFocused) return false;
+  if (!cfg('suppressWhenChromeFocused')) return false;
   try {
     const out = execSync(
       `osascript -e 'tell application "System Events" to (frontmost of process "Google Chrome")'`,
@@ -143,24 +133,25 @@ function isChromeFocused() {
     ).trim();
     return out === 'true';
   } catch (_) {
-    // If the AppleScript call fails (e.g. Accessibility permission not granted
-    // for the terminal), assume the user is NOT at the browser so notifications
-    // still fire — safer default than silent failure.
+    // AppleScript can fail (Accessibility permission not granted). Default to
+    // "not focused" so notifications still fire — safer than silent failure.
     return false;
   }
 }
 
 function notify(title, body, opts = {}) {
+  // Test hook: when set, capture the call and skip the macOS-specific bits.
+  if (cfg('notifyHook')) { cfg('notifyHook')(title, body, opts); return; }
   const { force = false } = opts;
   if (!force && isChromeFocused()) {
-    // User is already looking at a Chrome window — they can see the state
-    // change themselves. Skip the notification + sound entirely.
+    // User is already at the browser — they can see the state change
+    // themselves. Skip the notification + sound entirely.
     return;
   }
   const safe = (s) => String(s).replace(/"/g, '\\"');
   try {
     execSync(
-      `osascript -e 'display notification "${safe(body)}" with title "${safe(title)}" subtitle "${safe(CONFIG.notifySubtitle)}"'`,
+      `osascript -e 'display notification "${safe(body)}" with title "${safe(title)}" subtitle "${safe(cfg('notifySubtitle'))}"'`,
       { stdio: 'ignore' }
     );
   } catch (_) { /* non-fatal */ }
@@ -172,41 +163,44 @@ function openInBrowser(url) {
   try { spawn('open', [url], { detached: true, stdio: 'ignore' }).unref(); } catch (_) {}
 }
 
-// ---------- per-profile state ----------
+// ============================================================
+// PER-PROFILE STATE
+// ============================================================
 // Shared across profiles so one clearing can notify + optionally close others.
 const profileContexts = new Map(); // index -> { context, page, cleared }
-let anyCleared = false;
 
 function profileLabel(i, n) {
   return `[Profile ${i + 1}/${n}]`;
 }
 
-// ---------- single-profile runner ----------
+// ============================================================
+// SINGLE-PROFILE RUNNER
+// ============================================================
 async function runProfile(index, total) {
-  const profileDir = path.join(CONFIG.profileBaseDir, `profile-${index + 1}`);
+  const profileDir = path.join(cfg('profileBaseDir'), `profile-${index + 1}`);
   fs.mkdirSync(profileDir, { recursive: true });
 
   const tag = profileLabel(index, total);
-  const log = (...a) => CONFIG.verbose && console.log(new Date().toISOString().slice(11, 19), tag, ...a);
+  const log = (...a) => cfg('verbose') && console.log(new Date().toISOString().slice(11, 19), tag, ...a);
 
   log('Launching Chrome (profile dir:', profileDir + ')…');
   const context = await chromium.launchPersistentContext(profileDir, {
-    channel: 'chrome',
-    headless: false,
+    channel: cfg('channel'),
+    headless: cfg('headless'),
     viewport: { width: 1280, height: 900 },
-    locale: 'en-AU',
-    timezoneId: 'Australia/Sydney',
+    locale: cfg('locale'),
+    timezoneId: cfg('timezoneId'),
     args: ['--disable-blink-features=AutomationControlled', '--no-first-run'],
   });
 
   const page = await context.newPage();
-  await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-AU,en;q=0.9' });
+  await page.setExtraHTTPHeaders({ 'Accept-Language': cfg('acceptLanguage') });
 
   profileContexts.set(index, { context, page, cleared: false });
 
-  log('Opening', CONFIG.startUrl);
+  log('Opening', cfg('startUrl'));
   try {
-    await page.goto(CONFIG.startUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(cfg('startUrl'), { waitUntil: 'domcontentloaded', timeout: 60000 });
     await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
   } catch (e) {
     log('Initial navigation error (often Cloudflare challenge):', e.message);
@@ -227,15 +221,12 @@ async function runProfile(index, total) {
     if (STATES.CLOUDFLARE_TITLE.test(title) || STATES.CLOUDFLARE_BODY.test(body)) {
       return { state: 'WAITING_ROOM', title, url, waitMinutes, body };
     }
-    if (STATES.EQL_SELECTED.test(body))     return { state: 'SELECTED', title, url, body };
-    if (STATES.EQL_NOT_SELECTED.test(body)) return { state: 'NOT_SELECTED', title, url, body };
-    if (STATES.EQL_ENTERED.test(body))      return { state: 'DROP_ENTERED', title, url, body };
     return { state: 'THROUGH', title, url, body, waitMinutes };
   };
 
   log('Watching for state changes…');
   while (true) {
-    if (CONFIG.maxRuntimeMs && Date.now() - startedAt > CONFIG.maxRuntimeMs) {
+    if (cfg('maxRuntimeMs') && Date.now() - startedAt > cfg('maxRuntimeMs')) {
       log('Max runtime reached, exiting this profile.');
       break;
     }
@@ -253,23 +244,22 @@ async function runProfile(index, total) {
       lastWaitMinutes = p.waitMinutes;
     }
 
-    // Notifications are intentionally only fired on the three "outcome" state
-    // transitions below (THROUGH / SELECTED / NOT_SELECTED). WAITING_ROOM and
-    // DROP_ENTERED are silent — you can see them on the browser window
-    // yourself, and we don't want to spam you. notify() will additionally
-    // suppress if Chrome is already the frontmost app.
+    // Notifications are intentionally only fired on the "gate cleared"
+    // transition below (THROUGH). WAITING_ROOM is silent — you can see it
+    // on the browser window yourself. notify() additionally suppresses if
+    // Chrome is already the frontmost app.
 
     if (p.state !== lastState) {
+      if (cfg('stateChangeHook')) cfg('stateChangeHook')(p.state, p.url, p.title, index, total);
       log('State:', lastState || '∅', '→', p.state, '| url:', p.url, '| title:', p.title);
       lastState = p.state;
 
       if (p.state === 'THROUGH') {
         notify(`${tag} ✅ gate cleared`, 'You\'re past the Cloudflare queue. Page opened in your default browser.');
         profileContexts.get(index).cleared = true;
-        anyCleared = true;
-        if (CONFIG.openOnClear) openInBrowser(p.url);
+        if (cfg('openOnClear')) openInBrowser(p.url);
 
-        if (CONFIG.closeOthersOnClear) {
+        if (cfg('closeOthersOnClear')) {
           for (const [i, { context: otherCtx }] of profileContexts) {
             if (i !== index) {
               log('Closing other profile', i + 1, '(gate already cleared by us)…');
@@ -277,58 +267,23 @@ async function runProfile(index, total) {
             }
           }
         }
-
-        if (CONFIG.autoEnterDrops && /runfair\.com|eql\.com/.test(p.url)) {
-          log('Landed on EQL — looking for Enter button…');
-          let entered = false;
-          for (const sel of EQL_ENTER_SELECTORS) {
-            const loc = page.locator(sel).first();
-            if (await loc.count()) {
-              try {
-                if (await loc.isVisible({ timeout: 1500 })) {
-                  log('Clicking Enter (' + sel + ') in 2-4s…');
-                  await page.waitForTimeout(2000 + Math.random() * 2000);
-                  await loc.click({ timeout: 5000 });
-                  entered = true;
-                  break;
-                }
-              } catch (_) {}
-            }
-          }
-          if (entered) {
-            log('Entered EQL drop. Continuing to watch for selection.');
-          } else {
-            log('No EQL Enter button visible — click it manually if there is one.');
-          }
-        }
-      } else if (p.state === 'SELECTED') {
-        notify(`${tag} 🎉 you're in!`, 'Purchase page opened. Move fast.');
-        if (CONFIG.openOnClear) openInBrowser(p.url);
-        // Close other profiles too — the mission is accomplished.
-        if (CONFIG.closeOthersOnClear) {
-          for (const [i, { context: otherCtx }] of profileContexts) {
-            if (i !== index) otherCtx.close().catch(() => {});
-          }
-        }
-        break;
-      } else if (p.state === 'NOT_SELECTED') {
-        notify(`${tag} not selected`, 'Better luck next drop. This profile stopping.');
-        break;
       }
-      // WAITING_ROOM and DROP_ENTERED transitions are intentionally silent —
-      // you can see them on the browser window. No notify() call.
+      // WAITING_ROOM transitions are intentionally silent — you can see
+      // them on the browser window. No notify() call.
     }
 
-    await page.waitForTimeout(CONFIG.pollIntervalMs);
+    await page.waitForTimeout(cfg('pollIntervalMs'));
   }
 
   log('Exiting.');
 }
 
-// ---------- main ----------
-(async () => {
-  log = (...a) => CONFIG.verbose && console.log(new Date().toISOString().slice(11, 19), '[main]', ...a);
-  fs.mkdirSync(CONFIG.profileBaseDir, { recursive: true });
+// ============================================================
+// MAIN
+// ============================================================
+async function main() {
+  const log = (...a) => cfg('verbose') && console.log(new Date().toISOString().slice(11, 19), '[main]', ...a);
+  fs.mkdirSync(cfg('profileBaseDir'), { recursive: true });
 
   log(`Starting ${CONFIG.profileCount} parallel profile(s)…`);
 
@@ -337,13 +292,13 @@ async function runProfile(index, total) {
   for (let i = 0; i < CONFIG.profileCount; i++) {
     tasks.push(runProfile(i, CONFIG.profileCount).catch(e => {
       console.error(`[Profile ${i + 1}] fatal:`, e.message);
-      notify(`${CONFIG.notifySubtitle}: profile ${i + 1} crashed`, String(e.message || e), false);
+      notify(`${cfg('notifySubtitle')}: profile ${i + 1} crashed`, String(e.message || e), { force: false });
     }));
   }
 
   // Heartbeat so you can see the watcher is alive even when nothing's happening.
   const heartbeat = setInterval(() => {
-    if (!CONFIG.verbose) return;
+    if (!cfg('verbose')) return;
     const cleared = Array.from(profileContexts.values()).filter(c => c.cleared).length;
     console.log(new Date().toISOString().slice(11, 19), '[main]',
       `profiles=${profileContexts.size}/${CONFIG.profileCount} cleared=${cleared}`);
@@ -352,12 +307,20 @@ async function runProfile(index, total) {
 
   await Promise.allSettled(tasks);
   log('All profiles finished.');
-  process.exit(0);
-})().catch((err) => {
-  console.error('Fatal:', err);
-  notify(`${CONFIG.notifySubtitle} crashed`, String(err && err.message || err), false);
-  process.exit(1);
-});
+}
 
-// Local log shim so the early main() logs work before the reassignment above.
-function log() {}
+// Only auto-run when invoked as a script. When required as a module (e.g.
+// by the e2e test) the caller invokes main() itself.
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('Fatal:', err);
+    notify(`${cfg('notifySubtitle')} crashed`, String(err && err.message || err), { force: false });
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  CONFIG, HARD_CODED, TEST, STATES,
+  runProfile, main, notify, isChromeFocused,
+  profileContexts, profileLabel, cfg,
+};

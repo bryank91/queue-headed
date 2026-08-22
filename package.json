@@ -1,11 +1,13 @@
 {
   "name": "queue-headed",
   "version": "1.0.0",
-  "description": "Multi-profile headed-browser watcher for virtual queues (Cloudflare Waiting Room, EQL, etc.) with focus-aware macOS notifications.",
+  "description": "Toymate-specific multi-profile headed-browser Cloudflare Waiting Room watcher with focus-aware macOS notifications.",
   "main": "watcher.js",
   "scripts": {
     "start": "node watcher.js",
     "verify": "node verify.js",
+    "test": "node test-states.js",
+    "test:e2e": "node test-e2e.js",
     "test:focus": "node test-focus.js"
   },
   "keywords": [
