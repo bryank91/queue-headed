@@ -38,14 +38,14 @@ if (!STATES.CLOUDFLARE_TITLE || !STATES.CLOUDFLARE_BODY) {
 // ---- mirror of probe()'s branching + waitMinutes extraction ----
 // Keep this in sync with probe() in watcher.js. If you change probe(),
 // update this function.
-function probe(title, body) {
+function probe(title, body, queueSeen = false) {
   let waitMinutes = null;
   const m = body.match(/estimated wait time is\s*(\d+)\s*minutes?/i);
   if (m) waitMinutes = parseInt(m[1], 10);
   if (STATES.CLOUDFLARE_TITLE.test(title) || STATES.CLOUDFLARE_BODY.test(body)) {
     return { state: 'WAITING_ROOM', waitMinutes };
   }
-  return { state: 'THROUGH', waitMinutes };
+  return { state: queueSeen ? 'THROUGH' : 'NOT_IN_QUEUE', waitMinutes };
 }
 
 // ---- test cases ----
@@ -94,23 +94,30 @@ const cases = [
     expect: { state: 'WAITING_ROOM', waitMinutes: null },
   },
 
-  // Cleared / THROUGH
+  // A normal direct visit must not be treated as a cleared queue.
   {
-    name: 'cleared — real product page',
+    name: 'normal direct visit — real product page',
     title: 'Toymate — Pokémon Trading Cards',
     body:  'Add to cart. Free shipping on orders over $50.',
-    expect: { state: 'THROUGH', waitMinutes: null },
+    expect: { state: 'NOT_IN_QUEUE', waitMinutes: null },
   },
   {
-    name: 'cleared — generic e-commerce',
+    name: 'normal direct visit — generic e-commerce',
     title: 'Foot Locker — Sneakers',
     body:  'Shop the latest releases. New arrivals daily.',
-    expect: { state: 'THROUGH', waitMinutes: null },
+    expect: { state: 'NOT_IN_QUEUE', waitMinutes: null },
   },
   {
-    name: 'cleared — minimal empty page',
+    name: 'normal direct visit — minimal empty page',
     title: 'Home',
     body:  '',
+    expect: { state: 'NOT_IN_QUEUE', waitMinutes: null },
+  },
+  {
+    name: 'cleared after a queue was seen',
+    title: 'Toymate — Pokémon Trading Cards',
+    body:  'Add to cart. Free shipping on orders over $50.',
+    queueSeen: true,
     expect: { state: 'THROUGH', waitMinutes: null },
   },
 
@@ -128,19 +135,19 @@ const cases = [
     name: 'no match: similar-but-different phrasing',
     title: 'Welcome',
     body:  'Please wait, you\'re in line for the bus.',
-    expect: { state: 'THROUGH', waitMinutes: null },
+    expect: { state: 'NOT_IN_QUEUE', waitMinutes: null },
   },
   {
     name: 'no match: error page after Cloudflare challenge fails',
     title: 'Access denied',
     body:  'Sorry, you have been blocked.',
-    expect: { state: 'THROUGH', waitMinutes: null },
+    expect: { state: 'NOT_IN_QUEUE', waitMinutes: null },
   },
   {
     name: 'no match: captcha interstitial',
     title: 'Attention Required! | Cloudflare',
     body:  'Please complete the security check below to proceed.',
-    expect: { state: 'THROUGH', waitMinutes: null },
+    expect: { state: 'NOT_IN_QUEUE', waitMinutes: null },
   },
 ];
 
@@ -148,7 +155,7 @@ const cases = [
 let pass = 0, fail = 0;
 const failures = [];
 for (const c of cases) {
-  const got = probe(c.title, c.body);
+  const got = probe(c.title, c.body, c.queueSeen);
   const ok =
     got.state === c.expect.state &&
     got.waitMinutes === c.expect.waitMinutes;

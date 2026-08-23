@@ -46,14 +46,14 @@ const PROFILE_DIR  = path.join(process.env.HOME, 'queue-headed', 'profiles', 'pr
   })));
   console.log(`\nLinks (${links.length} total):`);
   for (const l of links) {
-    const interesting = /(runfair|eql|queue|drop|launch|waitlist|pokemon|trading|sneaker|raffle)/i.test(l.text + ' ' + (l.href||''));
+    const interesting = /(cloudflare|waiting room|queue|waitlist)/i.test(l.text + ' ' + (l.href||''));
     if (interesting) console.log('  *', l.href, '||', l.text);
   }
   console.log('\nFirst 20 links:');
   for (const l of links.slice(0, 20)) console.log('  -', l.href, '||', l.text);
 
   const bodyText = await page.locator('body').innerText().catch(() => '');
-  const keywords = ['queue', 'launch', 'drop', 'raffle', 'waitlist', 'enter', 'join', 'fair', 'eql', 'runfair', 'pokemon', 'waiting room'];
+  const keywords = ['cloudflare', 'queue', 'waitlist', 'waiting room', 'estimated wait time', 'you are now in line'];
   console.log('\nKeyword hits in body text:');
   for (const k of keywords) {
     const re = new RegExp(`\\b${k}\\b`, 'i');
@@ -65,8 +65,8 @@ const PROFILE_DIR  = path.join(process.env.HOME, 'queue-headed', 'profiles', 'pr
   }
 
   const scripts = await page.$$eval('script[src]', ss => ss.map(s => s.getAttribute('src')));
-  const eqlScripts = scripts.filter(s => /eql|runfair/i.test(s || ''));
-  console.log('\nEQL/runfair script tags:', eqlScripts.length ? eqlScripts : 'none');
+  const cloudflareScripts = scripts.filter(s => /cloudflare|waitingroom/i.test(s || ''));
+  console.log('\nCloudflare-related script tags:', cloudflareScripts.length ? cloudflareScripts : 'none');
   if (scripts.length) console.log('First 5 script srcs:', scripts.slice(0, 5));
 
   fs.writeFileSync('/tmp/queue-headed-inspect.html', await page.content());

@@ -18,10 +18,11 @@
  *   - For each profile, polls every few seconds. State machine:
  *        WAITING_ROOM  -> Cloudflare waiting room. Wait. Don't notify — the
  *                          user can see this on the browser window.
- *        THROUGH       -> Title changed. You're past the gate. Notify (unless
- *                          Chrome is already frontmost), open the page.
- *   - Notifications ONLY fire on the "gate cleared" transition. WAITING_ROOM
- *     is silent — you can see it on the browser window yourself.
+ *        NOT_IN_QUEUE  -> A normal site page. Stay silent and keep watching.
+ *        THROUGH       -> A queue was previously seen and has cleared. Notify
+ *                          (unless Chrome is already frontmost), open the page.
+ *   - Notifications only fire after a profile has actually seen a Cloudflare
+ *     queue and then clears it. A normal direct visit never triggers one.
  *
  * Run:
  *   node watcher.js
@@ -208,6 +209,7 @@ async function runProfile(index, total) {
 
   let lastState = null;
   let lastWaitMinutes = null;
+  let queueSeen = false;
   const startedAt = Date.now();
 
   const probe = async () => {
@@ -221,7 +223,7 @@ async function runProfile(index, total) {
     if (STATES.CLOUDFLARE_TITLE.test(title) || STATES.CLOUDFLARE_BODY.test(body)) {
       return { state: 'WAITING_ROOM', title, url, waitMinutes, body };
     }
-    return { state: 'THROUGH', title, url, body, waitMinutes };
+    return { state: queueSeen ? 'THROUGH' : 'NOT_IN_QUEUE', title, url, body, waitMinutes };
   };
 
   log('Watching for state changes…');
@@ -234,7 +236,7 @@ async function runProfile(index, total) {
     let p;
     try { p = await probe(); }
     catch (e) {
-      p = { state: lastState || 'WAITING_ROOM', title: '', url: page.url(), body: '', waitMinutes: null };
+      p = { state: lastState || 'NOT_IN_QUEUE', title: '', url: page.url(), body: '', waitMinutes: null };
       log('Probe error:', e.message);
     }
 
@@ -243,6 +245,8 @@ async function runProfile(index, total) {
       log(`In Cloudflare waiting room — estimated wait: ${p.waitMinutes} min`);
       lastWaitMinutes = p.waitMinutes;
     }
+
+    if (p.state === 'WAITING_ROOM') queueSeen = true;
 
     // Notifications are intentionally only fired on the "gate cleared"
     // transition below (THROUGH). WAITING_ROOM is silent — you can see it
@@ -254,7 +258,7 @@ async function runProfile(index, total) {
       log('State:', lastState || '∅', '→', p.state, '| url:', p.url, '| title:', p.title);
       lastState = p.state;
 
-      if (p.state === 'THROUGH') {
+      if (p.state === 'THROUGH' && queueSeen) {
         notify(`${tag} ✅ gate cleared`, 'You\'re past the Cloudflare queue. Page opened in your default browser.');
         profileContexts.get(index).cleared = true;
         if (cfg('openOnClear')) openInBrowser(p.url);
@@ -267,9 +271,10 @@ async function runProfile(index, total) {
             }
           }
         }
+
+        break;
       }
-      // WAITING_ROOM transitions are intentionally silent — you can see
-      // them on the browser window. No notify() call.
+      // WAITING_ROOM and NOT_IN_QUEUE transitions are intentionally silent.
     }
 
     await page.waitForTimeout(cfg('pollIntervalMs'));
