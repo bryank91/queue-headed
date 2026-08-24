@@ -1,11 +1,8 @@
 # queue-headed
 
 > **⚠️  This script might only work with [toymate.com.au](https://toymate.com.au/).**
-> The start URL, Cloudflare detection patterns, browser locale, timezone, and
-> `Accept-Language` header are all hardcoded for Toymate. The only knob you
-> change at runtime is `profileCount` — the number of parallel Chrome
-> instances (i.e. queue tickets) you want to hold. To point this at a
-> different site, edit the `HARD_CODED` block at the top of `watcher.js`.
+> Runtime settings are stored in `config.yml`, which is intentionally ignored
+> because it is local configuration. Copy `config.example.yml` to create it.
 
 Multi-profile **headed-browser** watcher that holds N Cloudflare Waiting Room
 queue tickets for Toymate in parallel and notifies you on macOS the moment
@@ -15,9 +12,11 @@ you clear the gate.
 
 ```bash
 git clone https://github.com/bryank91/queue-headed.git
-cd queue-headed
+cd queue-headed/toymate
 npm install
-npm start                  # launches CONFIG.profileCount parallel Chrome instances
+npx playwright install chromium
+cp config.example.yml config.yml
+npm start                  # launches the configured parallel Chrome instances
 ```
 
 When a profile clears the gate you'll get a labelled macOS notification:
@@ -40,38 +39,29 @@ rewording "in line") could break them.
 
 ## Configuration
 
-Open `watcher.js` and edit two places:
+Copy `config.example.yml` to `config.yml` and edit the YAML:
 
-**1. `CONFIG` — the one runtime knob:**
-
-```js
-const CONFIG = {
-  profileCount: 3,   // number of parallel Chrome instances (= queue tickets)
-};
+```yaml
+toymate:
+  startUrl: "https://toymate.com.au/"
+  profileCount: 3
+  profileBaseDir: "profiles"
+  pollIntervalMs: 4000
+  suppressWhenChromeFocused: true
+  maxRuntimeMs: 0
+  openOnClear: true
+  closeOthersOnClear: true
+  browser:
+    channel: "chrome"
+    headless: false
+    locale: "en-AU"
+    timezoneId: "Australia/Sydney"
+    acceptLanguage: "en-AU,en;q=0.9"
 ```
 
-**2. `HARD_CODED` — everything else, edit this block to customize:**
-
-```js
-const HARD_CODED = {
-  startUrl:        'https://toymate.com.au/',
-  pollIntervalMs:  4000,
-  profileBaseDir:  path.join(process.env.HOME, 'queue-headed', 'profiles'),
-  maxRuntimeMs:    0,           // 0 = run forever
-  openOnClear:     true,        // open the cleared page in your default browser
-  closeOthersOnClear: false,    // close other profiles once one wins
-  suppressWhenChromeFocused: true,
-  notifySubtitle:  'Queue Watcher',
-  verbose:         true,
-  locale:          'en-AU',
-  timezoneId:      'Australia/Sydney',
-  acceptLanguage:  'en-AU,en;q=0.9',
-  channel:         'chrome',    // 'chrome' = Google Chrome
-  headless:        false,       // headed mode (you see the browser windows)
-};
-```
-
-There is no command-line override for any of these — edit the file.
+The watcher also emits structured status events when started, when a profile
+enters the queue, when the queue clears, and when it stops. The Discord trigger
+uses those events for webhook notifications.
 
 ## Run
 
@@ -123,7 +113,8 @@ silent — you see it on the browser window.
 
 ## Files
 
-- `watcher.js` — main script. The `HARD_CODED` block and `CONFIG` are at the top.
+- `watcher.js` — main script. Runtime settings are loaded from `config.yml`.
+- `config.example.yml` — safe configuration template.
 - `verify.js` — one-shot page inspector (dumps title, links, keywords, scripts)
 - `test-focus.js` — smoke test for the focus-aware notify() path
 - `test-states.js` — unit tests for the Cloudflare WR detection regexes

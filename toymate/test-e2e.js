@@ -149,9 +149,8 @@ function stopServer() {
   // Import watcher AFTER the playwright sanity check so we fail fast.
   const watcher = require('./watcher');
 
-  // Configure watcher for the test. Production knobs are hardcoded in
-  // watcher.js. We override via watcher.TEST (test-only infrastructure):
-  // each TEST field falls back to HARD_CODED when null.
+  // Configure watcher for the test. Production knobs are loaded from YAML;
+  // this test overrides them via watcher.TEST (test-only infrastructure).
   watcher.CONFIG.profileCount = 1;
   Object.assign(watcher.TEST, {
     startUrl:             BASE_URL,

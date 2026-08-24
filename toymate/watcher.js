@@ -3,13 +3,10 @@
  * queue-headed — multi-profile headed-browser watcher for toymate.com.au's
  * Cloudflare Waiting Room.
  *
- * ⚠️  This script might only work with toymate.com.au.
- * The Cloudflare detection patterns, the start URL, the browser locale, the
- * timezone, and the Accept-Language header are all hardcoded for Toymate.
- * The only knob you change at runtime is `profileCount` (the number of
- * parallel Chrome instances — i.e. the number of queue tickets you want to
- * hold). To point this at a different site, edit the constants at the top of
- * the file.
+ * ⚠️  This script is tuned for toymate.com.au.
+ * Runtime settings such as the start URL, profile count, browser locale,
+ * timezone, polling cadence, and notification behaviour are loaded from
+ * config.yml.
  *
  * What this watcher does:
  *   - Launches N parallel Chrome instances, each in its own profile, each
@@ -35,81 +32,57 @@ const { chromium } = require('playwright');
 const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const yaml = require('yaml');
 
-// ============================================================
-// HARD-CODED SETTINGS — tuned for toymate.com.au.
-// To customize: edit this block. Nothing here is runtime-configurable.
-// ============================================================
-const HARD_CODED = {
-  // The site to watch.
-  startUrl:             'https://toymate.com.au/',
+function expandHome(value) {
+  return value.startsWith('~/')
+    ? path.join(process.env.HOME || process.cwd(), value.slice(2))
+    : value;
+}
 
-  // Poll cadence (ms). Cloudflare refreshes the WR every ~30s; 4s polling
-  // catches the transition quickly without hammering the site.
-  pollIntervalMs:       4000,
+function loadYamlConfig() {
+  const configPath = process.env.TOYMATE_CONFIG_PATH || path.join(__dirname, 'config.yml');
+  const document = yaml.parse(fs.readFileSync(configPath, 'utf8')) || {};
+  const toymate = document.toymate || document;
+  const configDir = path.dirname(path.resolve(configPath));
+  const resolveConfigPath = (value) => {
+    const expanded = expandHome(String(value));
+    return path.isAbsolute(expanded) ? expanded : path.resolve(configDir, expanded);
+  };
 
-  // Base dir for per-profile Chrome data. Each profile gets
-  //   <base>/profile-<index>/
-  profileBaseDir:       path.join(process.env.HOME, 'queue-headed', 'profiles'),
+  if (!toymate.startUrl || !Number.isInteger(toymate.profileCount)) {
+    throw new Error(`Invalid Toymate YAML config: ${configPath}`);
+  }
 
-  // Stop the whole watcher after this many ms. 0 = forever.
-  maxRuntimeMs:         0,
+  return {
+    ...toymate,
+    ...toymate.browser,
+    profileBaseDir: resolveConfigPath(toymate.profileBaseDir),
+  };
+}
 
-  // Open the cleared page in your default browser when a profile gets through.
-  openOnClear:          true,
-
-  // When a profile clears the gate, close the *other* profiles' Chrome
-  // windows (their tickets are now redundant).
-  closeOthersOnClear:   false,
-
-  // Skip notifications when Google Chrome is the frontmost app — if you're
-  // already looking at the browser, you can see the state change yourself.
-  suppressWhenChromeFocused: true,
-
-  // macOS notification subtitle (the small grey text).
-  notifySubtitle:       'Queue Watcher',
-
-  // Terminal logging.
-  verbose:              true,
-
-  // Browser locale + timezone + Accept-Language. Wrong values may cause CF
-  // to serve a different regional variant or look suspicious.
-  locale:               'en-AU',
-  timezoneId:           'Australia/Sydney',
-  acceptLanguage:       'en-AU,en;q=0.9',
-
-  // Which browser to launch. 'chrome' = Google Chrome (must be installed).
-  // For tests on machines without Chrome, the e2e test overrides this.
-  channel:              'chrome',
-
-  // Headed (default) vs headless. Headed is required so the user can see the
-  // browser window. Headless is used by the e2e test.
-  headless:             false,
-
-  // Test hooks — null in production. The e2e test sets these to capture
-  // notifications and state transitions.
-  notifyHook:           null,
-  stateChangeHook:      null,
-};
-
-// ============================================================
-// USER CONFIG — the one knob.
-// ============================================================
-const CONFIG = {
-  // Number of parallel Chrome profiles. Each holds its own queue ticket.
-  // 1 = single profile. Higher = more chances, more CPU/RAM.
-  profileCount:         3,
-};
+// Production settings come exclusively from toymate/config.yml. HARD_CODED is
+// retained as a compatibility export for the existing test harness; it is not
+// a source of defaults.
+const HARD_CODED = loadYamlConfig();
+const CONFIG = { profileCount: HARD_CODED.profileCount };
 
 // ============================================================
 // TEST INFRASTRUCTURE — used by the e2e test only. Leave as-is in production.
 // ============================================================
-// Each field, if non-null, overrides the corresponding HARD_CODED value. In
-// production code path these are always null and HARD_CODED values are used.
+// Each field, if non-null, overrides the corresponding YAML value. In
+// production these are all null and the YAML values are used.
 const TEST = Object.fromEntries(Object.keys(HARD_CODED).map(k => [k, null]));
+TEST.notifyHook = null;
+TEST.stateChangeHook = null;
 
-// Effective value: TEST override if set, otherwise the hardcoded default.
-function cfg(key) { return TEST[key] !== null ? TEST[key] : HARD_CODED[key]; }
+// Effective value: TEST override if set, otherwise the YAML value.
+function cfg(key) { return TEST[key] !== null && TEST[key] !== undefined ? TEST[key] : HARD_CODED[key]; }
+
+function emitStatus(type, details = {}) {
+  if (typeof process.send !== 'function') return;
+  try { process.send({ source: 'toymate', type, ...details }); } catch (_) {}
+}
 
 // ============================================================
 // STATE DETECTION — Cloudflare Waiting Room regexes.
@@ -169,6 +142,7 @@ function openInBrowser(url) {
 // ============================================================
 // Shared across profiles so one clearing can notify + optionally close others.
 const profileContexts = new Map(); // index -> { context, page, cleared }
+let stopRequested = false;
 
 function profileLabel(i, n) {
   return `[Profile ${i + 1}/${n}]`;
@@ -228,6 +202,10 @@ async function runProfile(index, total) {
 
   log('Watching for state changes…');
   while (true) {
+    if (stopRequested) {
+      log('Stopping because another profile cleared the queue.');
+      break;
+    }
     if (cfg('maxRuntimeMs') && Date.now() - startedAt > cfg('maxRuntimeMs')) {
       log('Max runtime reached, exiting this profile.');
       break;
@@ -258,12 +236,16 @@ async function runProfile(index, total) {
       log('State:', lastState || '∅', '→', p.state, '| url:', p.url, '| title:', p.title);
       lastState = p.state;
 
+      if (p.state === 'WAITING_ROOM') emitStatus('waiting_room', { profile: index + 1, total });
+
       if (p.state === 'THROUGH' && queueSeen) {
         notify(`${tag} ✅ gate cleared`, 'You\'re past the Cloudflare queue. Page opened in your default browser.');
         profileContexts.get(index).cleared = true;
+        emitStatus('cleared', { profile: index + 1, total, url: p.url });
         if (cfg('openOnClear')) openInBrowser(p.url);
 
         if (cfg('closeOthersOnClear')) {
+          stopRequested = true;
           for (const [i, { context: otherCtx }] of profileContexts) {
             if (i !== index) {
               log('Closing other profile', i + 1, '(gate already cleared by us)…');
@@ -291,12 +273,15 @@ async function main() {
   fs.mkdirSync(cfg('profileBaseDir'), { recursive: true });
 
   log(`Starting ${CONFIG.profileCount} parallel profile(s)…`);
+  emitStatus('started', { profiles: CONFIG.profileCount });
 
   // Run all profiles concurrently. If one crashes, the others keep going.
   const tasks = [];
   for (let i = 0; i < CONFIG.profileCount; i++) {
     tasks.push(runProfile(i, CONFIG.profileCount).catch(e => {
+      if (stopRequested) return;
       console.error(`[Profile ${i + 1}] fatal:`, e.message);
+      emitStatus('error', { profile: i + 1, message: String(e.message || e) });
       notify(`${cfg('notifySubtitle')}: profile ${i + 1} crashed`, String(e.message || e), { force: false });
     }));
   }
@@ -311,7 +296,11 @@ async function main() {
   heartbeat.unref();
 
   await Promise.allSettled(tasks);
+  for (const { context } of profileContexts.values()) {
+    await context.close().catch(() => {});
+  }
   log('All profiles finished.');
+  emitStatus('stopped', { reason: stopRequested ? 'cleared' : 'finished' });
 }
 
 // Only auto-run when invoked as a script. When required as a module (e.g.
@@ -319,6 +308,7 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => {
     console.error('Fatal:', err);
+    emitStatus('error', { message: String(err && err.message || err) });
     notify(`${cfg('notifySubtitle')} crashed`, String(err && err.message || err), { force: false });
     process.exit(1);
   });

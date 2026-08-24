@@ -1,0 +1,19 @@
+# Copy to config.yml for local use.
+
+toymate:
+  startUrl: "https://toymate.com.au/"
+  profileCount: 3
+  profileBaseDir: "profiles"
+  pollIntervalMs: 4000
+  suppressWhenChromeFocused: true
+  maxRuntimeMs: 0
+  openOnClear: true
+  closeOthersOnClear: true
+  notifySubtitle: "Toymate Queue Watcher"
+  verbose: true
+  browser:
+    channel: "chrome"
+    headless: false
+    locale: "en-AU"
+    timezoneId: "Australia/Sydney"
+    acceptLanguage: "en-AU,en;q=0.9"

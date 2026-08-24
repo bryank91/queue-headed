@@ -1,0 +1,17 @@
+{
+   "scripts": {
+      "start": "npm run compile && node dist/index.js",
+      "compile": "npx tsc --build",
+      "debug": "npx tsc --build && node dist/index.js",
+      "test:trigger": "npm run compile && node test-trigger.js"
+   },
+   "dependencies": {
+      "discord.js-selfbot-v13": "^2.14.10",
+      "duckdb": "^0.9.1",
+      "yaml": "^2.3.2"
+   },
+   "devDependencies": {
+      "@types/node": "^20.5.7",
+      "typescript": "^5.2.2"
+   }
+}

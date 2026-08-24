@@ -1,0 +1,38 @@
+# Copy this file to config.yml and replace the placeholders.
+# config.yml is ignored because it contains credentials and local settings.
+
+token: "REPLACE_WITH_DISCORD_ACCOUNT_TOKEN"
+status: "online"
+logMessage: "[%date%] Mirrored @%author%'s message from %server% #%channel%."
+
+mirrors: {}
+
+db:
+  directory: "./data/identifier.db"
+
+toymateTrigger:
+  enabled: false
+
+  # Restrict matching to the alert channel and, optionally, the alert bot.
+  channelIds: []
+  authorIds: []
+
+  # At least one match rule must match the message content or embed text.
+  contentEquals:
+    - "Toymate queue is open"
+  contentIncludes: []
+  regex: ""
+
+  cooldownSeconds: 300
+  watcherPath: "../toymate/watcher.js"
+  watcherConfigPath: "../toymate/config.yml"
+  workingDirectory: "../toymate"
+
+  notifications:
+    enabled: true
+    webhookUrls: []
+    postStarted: true
+    postWaitingRoom: true
+    postCleared: true
+    postStopped: true
+    postErrors: true
