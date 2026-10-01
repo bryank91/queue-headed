@@ -3,3 +3,4 @@ dist
 config.yml
 .config.local.yml
 .DS_Store
+/data/
