@@ -1,0 +1,27 @@
+# dependencies
+node_modules/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# Per-profile Chrome user-data directories. Each holds cookies, cart state,
+# and guest session data — do NOT commit these. Re-created automatically.
+profile*/
+.chrome-run-profiles/
+
+# CDP probe dumps
+chrome-cdp-probe-*/
+
+# Runtime evidence (screenshots, DOM dumps, run manifests)
+evidence/
+
+# logs
+*.log
+
+# macOS
+.DS_Store
+
+# agent session state
+.pi/
