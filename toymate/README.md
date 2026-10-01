@@ -8,6 +8,10 @@ Multi-profile **headed-browser** watcher that holds N Cloudflare Waiting Room
 queue tickets for Toymate in parallel and notifies you on macOS the moment
 you clear the gate.
 
+> For the full end-to-end setup (including the Discord auto-trigger that
+> starts this watcher when a Toymate link appears), see the
+> [root README](../README.md).
+
 ## Quick start
 
 ```bash

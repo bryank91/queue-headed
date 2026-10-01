@@ -17,10 +17,15 @@ toymateTrigger:
   channelIds: []
   authorIds: []
 
-  # At least one match rule must match the message content or embed text.
+  # At least one match rule must match. Rules are tested against the message
+  # content plus every embed URL, embed title/description, and embed field.
+  # For "a Toymate link appeared" triggers, use contentIncludes (or regex):
+  #   contentIncludes:
+  #     - "toymate.com.au"
   contentEquals:
     - "Toymate queue is open"
-  contentIncludes: []
+  contentIncludes:
+    - "toymate.com.au"
   regex: ""
 
   cooldownSeconds: 300

@@ -13,6 +13,7 @@ export interface ToymateTriggerMessage {
    channelId: string;
    authorId: string;
    content: string;
+   embedUrls?: string[];
    embedText?: string[];
 }
 
@@ -23,7 +24,9 @@ export function matchesToymateTrigger(message: ToymateTriggerMessage, settings: 
    const authorIds = settings.authorIds ?? [];
    if (authorIds.length && !authorIds.includes(message.authorId)) return false;
 
-   const searchableText = [message.content, ...(message.embedText ?? [])]
+   // Searchable text covers the message content plus everything the link may
+   // hide in: embed URLs, embed titles/descriptions, and embed field text.
+   const searchableText = [message.content, ...(message.embedUrls ?? []), ...(message.embedText ?? [])]
       .filter(Boolean).join("\n").trim();
 
    if ((settings.contentEquals ?? []).some((value) => searchableText === value)) return true;
@@ -77,14 +80,21 @@ export class ToymateTrigger {
 
    private matches(message: Message): boolean {
       const embedText: string[] = [];
+      const embedUrls: string[] = [];
       for (const embed of message.embeds) {
          if (embed.title) embedText.push(embed.title);
          if (embed.description) embedText.push(embed.description);
+         if (embed.url) embedUrls.push(embed.url);
+         for (const field of embed.fields ?? []) {
+            if (field.name) embedText.push(field.name);
+            if (field.value) embedText.push(field.value);
+         }
       }
       return matchesToymateTrigger({
          channelId: message.channelId,
          authorId: message.author.id,
          content: message.content,
+         embedUrls,
          embedText,
       }, this.settings);
    }

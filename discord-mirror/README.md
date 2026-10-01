@@ -1,6 +1,9 @@
 # Discord Mirror
 Make your account behave like a bot and mirror messages from a server to another (through webhooks).
 
+> For the full end-to-end setup (including the Toymate queue watcher that
+> `toymateTrigger` launches), see the [root README](../README.md).
+
 # Showcase
 
 > Original message (from server A):\
@@ -49,6 +52,26 @@ toymateTrigger:
     postWaitingRoom: true
     postCleared: true
 ```
+
+### Triggering on a Toymate link
+
+Rules are matched against the message content **and** every embed URL, embed
+title/description, and embed field — so both plain-text links
+(`https://toymate.com.au/`) and bot embeds that carry the link in `embed.url`
+trigger the queue. For a "link appeared" trigger, set:
+
+```yaml
+toymateTrigger:
+  enabled: true
+  channelIds: ["ALERT_CHANNEL_ID"]
+  contentIncludes:
+    - "toymate.com.au"
+```
+
+While the watcher runs, lifecycle updates (`🟡 started`, `⏳ waiting room`,
+`✅ cleared`, `ℹ️ stopped`, `⚠️ error`) are posted to the configured webhook
+channel, and a second trigger message is ignored (cooldown + already-running
+guards).
 
 The trigger is disabled by default. `config.yml` is ignored by Git because it
 contains credentials and local settings; use `config.example.yml` as the safe
