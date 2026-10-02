@@ -42,3 +42,27 @@ toymateTrigger:
     postCleared: true
     postStopped: true
     postErrors: true
+
+# Independent EB Games alert and watcher. Fill in the channel and enable after
+# checking a real EB Games alert. Its browser profiles live under ../ebgames/.
+ebGamesTrigger:
+  enabled: false
+  channelIds: []
+  authorIds: []
+  contentEquals: []
+  contentIncludes:
+    - "ebgames.com.au"
+    - "Queue is up!"
+  regex: ""
+  cooldownSeconds: 300
+  watcherPath: "../ebgames/watcher.js"
+  watcherConfigPath: "../ebgames/config.yml"
+  workingDirectory: "../ebgames"
+  notifications:
+    enabled: false
+    webhookUrls: []
+    postStarted: true
+    postWaitingRoom: true
+    postCleared: true
+    postStopped: true
+    postErrors: true

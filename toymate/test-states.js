@@ -2,10 +2,7 @@
 /**
  * State-detection unit test for queue-headed.
  *
- * Validates the Cloudflare Waiting Room detection logic in watcher.js
- * without needing a real headed browser. Pulls the `STATES` object out of
- * watcher.js by regex (same duplication pattern as test-focus.js — should
- * be extracted to a shared module eventually, per review #7).
+ * Validates queue and interstitial detection without a real headed browser.
  *
  * Exit code 0 = all pass. Exit code 1 = any fail.
  *
@@ -13,39 +10,12 @@
  *        npm test
  */
 
-const fs = require('fs');
-const path = require('path');
-
-// ---- load STATES from watcher.js ----
-// NOTE: eval() won't work here because `const` is block-scoped to the eval
-// call and doesn't leak to the caller (only `var` and function decls do). We
-// use the Function constructor instead — it creates a fresh scope, runs the
-// STATES declaration, and we explicitly return the value.
-const watcherSrc = fs.readFileSync(path.join(__dirname, 'watcher.js'), 'utf8');
-const statesBlock = watcherSrc.match(/const STATES = \{[\s\S]*?\n\};/);
-if (!statesBlock) {
-  console.error('FAIL: could not locate `const STATES = { ... }` block in watcher.js');
-  process.exit(2);
-}
-const STATES = (new Function(statesBlock[0] + '; return STATES;'))();
+const { STATES, classifyPage } = require('./state');
 
 // Sanity check that we actually got the expected keys.
 if (!STATES.CLOUDFLARE_TITLE || !STATES.CLOUDFLARE_BODY) {
   console.error('FAIL: STATES missing CLOUDFLARE_TITLE / CLOUDFLARE_BODY:', Object.keys(STATES));
   process.exit(2);
-}
-
-// ---- mirror of probe()'s branching + waitMinutes extraction ----
-// Keep this in sync with probe() in watcher.js. If you change probe(),
-// update this function.
-function probe(title, body, queueSeen = false) {
-  let waitMinutes = null;
-  const m = body.match(/estimated wait time is\s*(\d+)\s*minutes?/i);
-  if (m) waitMinutes = parseInt(m[1], 10);
-  if (STATES.CLOUDFLARE_TITLE.test(title) || STATES.CLOUDFLARE_BODY.test(body)) {
-    return { state: 'WAITING_ROOM', waitMinutes };
-  }
-  return { state: queueSeen ? 'THROUGH' : 'NOT_IN_QUEUE', waitMinutes };
 }
 
 // ---- test cases ----
@@ -108,6 +78,13 @@ const cases = [
     expect: { state: 'NOT_IN_QUEUE', waitMinutes: null },
   },
   {
+    name: 'Cloudflare challenge after queue does not report a clear',
+    title: 'Just a moment...',
+    body: 'Checking your browser before accessing the site.',
+    queueSeen: true,
+    expect: { state: 'INTERSTITIAL', waitMinutes: null },
+  },
+  {
     name: 'normal direct visit — minimal empty page',
     title: 'Home',
     body:  '',
@@ -141,13 +118,13 @@ const cases = [
     name: 'no match: error page after Cloudflare challenge fails',
     title: 'Access denied',
     body:  'Sorry, you have been blocked.',
-    expect: { state: 'NOT_IN_QUEUE', waitMinutes: null },
+    expect: { state: 'INTERSTITIAL', waitMinutes: null },
   },
   {
     name: 'no match: captcha interstitial',
     title: 'Attention Required! | Cloudflare',
     body:  'Please complete the security check below to proceed.',
-    expect: { state: 'NOT_IN_QUEUE', waitMinutes: null },
+    expect: { state: 'INTERSTITIAL', waitMinutes: null },
   },
 ];
 
@@ -155,7 +132,7 @@ const cases = [
 let pass = 0, fail = 0;
 const failures = [];
 for (const c of cases) {
-  const got = probe(c.title, c.body, c.queueSeen);
+  const got = classifyPage(c.title, c.body, c.queueSeen);
   const ok =
     got.state === c.expect.state &&
     got.waitMinutes === c.expect.waitMinutes;

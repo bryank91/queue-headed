@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * queue-headed — multi-profile headed-browser watcher for toymate.com.au's
- * Cloudflare Waiting Room.
+ * queue-headed — headed-browser watcher shared by Toymate and EB Games.
  *
- * ⚠️  This script is tuned for toymate.com.au.
+ * Queue detection currently recognizes Cloudflare Waiting Room wording.
  * Runtime settings such as the start URL, profile count, browser locale,
  * timezone, polling cadence, and notification behaviour are loaded from
  * config.yml.
@@ -18,8 +17,9 @@
  *        NOT_IN_QUEUE  -> A normal site page. Stay silent and keep watching.
  *        THROUGH       -> A queue was previously seen and has cleared. Notify
  *                          (unless Chrome is already frontmost), open the page.
- *   - Notifications only fire after a profile has actually seen a Cloudflare
- *     queue and then clears it. A normal direct visit never triggers one.
+ *   - A configured browser-open notification reports that an alert launched
+ *     Chrome. A separate gate-cleared notification fires only after a profile
+ *     has seen a queue and then clears it.
  *
  * Run:
  *   node watcher.js
@@ -33,6 +33,7 @@ const { execSync, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const yaml = require('yaml');
+const { STATES, classifyPage } = require('./state');
 
 function expandHome(value) {
   return value.startsWith('~/')
@@ -41,9 +42,9 @@ function expandHome(value) {
 }
 
 function loadYamlConfig() {
-  const configPath = process.env.TOYMATE_CONFIG_PATH || path.join(__dirname, 'config.yml');
+  const configPath = process.env.QUEUE_CONFIG_PATH || process.env.TOYMATE_CONFIG_PATH || path.join(__dirname, 'config.yml');
   const document = yaml.parse(fs.readFileSync(configPath, 'utf8')) || {};
-  const toymate = document.toymate || document;
+  const toymate = document.queue || document.toymate || document;
   const configDir = path.dirname(path.resolve(configPath));
   const resolveConfigPath = (value) => {
     const expanded = expandHome(String(value));
@@ -51,7 +52,7 @@ function loadYamlConfig() {
   };
 
   if (!toymate.startUrl || !Number.isInteger(toymate.profileCount)) {
-    throw new Error(`Invalid Toymate YAML config: ${configPath}`);
+    throw new Error(`Invalid queue watcher YAML config: ${configPath}`);
   }
 
   return {
@@ -61,7 +62,7 @@ function loadYamlConfig() {
   };
 }
 
-// Production settings come exclusively from toymate/config.yml. HARD_CODED is
+// Production settings come exclusively from the selected YAML file. HARD_CODED is
 // retained as a compatibility export for the existing test harness; it is not
 // a source of defaults.
 const HARD_CODED = loadYamlConfig();
@@ -81,16 +82,8 @@ function cfg(key) { return TEST[key] !== null && TEST[key] !== undefined ? TEST[
 
 function emitStatus(type, details = {}) {
   if (typeof process.send !== 'function') return;
-  try { process.send({ source: 'toymate', type, ...details }); } catch (_) {}
+  try { process.send({ source: cfg('statusSource') || 'toymate', type, ...details }); } catch (_) {}
 }
-
-// ============================================================
-// STATE DETECTION — Cloudflare Waiting Room regexes.
-// ============================================================
-const STATES = {
-  CLOUDFLARE_TITLE: /waiting room powered by cloudflare/i,
-  CLOUDFLARE_BODY:  /you are now in line|estimated wait time is|virtual queue/i,
-};
 
 // ============================================================
 // macOS HELPERS
@@ -143,6 +136,7 @@ function openInBrowser(url) {
 // Shared across profiles so one clearing can notify + optionally close others.
 const profileContexts = new Map(); // index -> { context, page, cleared }
 let stopRequested = false;
+let browserOpenNotified = false;
 
 function profileLabel(i, n) {
   return `[Profile ${i + 1}/${n}]`;
@@ -173,6 +167,11 @@ async function runProfile(index, total) {
 
   profileContexts.set(index, { context, page, cleared: false });
 
+  if (cfg('notifyOnBrowserOpen') && !browserOpenNotified) {
+    browserOpenNotified = true;
+    notify(`${cfg('siteName') || 'Queue'} alert received`, 'Browser opened. Checking whether the waiting room is active.', { force: true });
+  }
+
   log('Opening', cfg('startUrl'));
   try {
     await page.goto(cfg('startUrl'), { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -190,14 +189,7 @@ async function runProfile(index, total) {
     const title = await page.title().catch(() => '');
     const body  = ((await page.locator('body').innerText().catch(() => '')) || '');
     const url   = page.url();
-    let waitMinutes = null;
-    const m = body.match(/estimated wait time is\s*(\d+)\s*minutes?/i);
-    if (m) waitMinutes = parseInt(m[1], 10);
-
-    if (STATES.CLOUDFLARE_TITLE.test(title) || STATES.CLOUDFLARE_BODY.test(body)) {
-      return { state: 'WAITING_ROOM', title, url, waitMinutes, body };
-    }
-    return { state: queueSeen ? 'THROUGH' : 'NOT_IN_QUEUE', title, url, body, waitMinutes };
+    return { ...classifyPage(title, body, queueSeen), title, url, body };
   };
 
   log('Watching for state changes…');
@@ -226,10 +218,8 @@ async function runProfile(index, total) {
 
     if (p.state === 'WAITING_ROOM') queueSeen = true;
 
-    // Notifications are intentionally only fired on the "gate cleared"
-    // transition below (THROUGH). WAITING_ROOM is silent — you can see it
-    // on the browser window yourself. notify() additionally suppresses if
-    // Chrome is already the frontmost app.
+    // WAITING_ROOM is silent. The browser-open notification has already
+    // reported the alert; gate-cleared notification fires on THROUGH.
 
     if (p.state !== lastState) {
       if (cfg('stateChangeHook')) cfg('stateChangeHook')(p.state, p.url, p.title, index, total);

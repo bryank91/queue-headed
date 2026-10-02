@@ -1,0 +1,7 @@
+{
+  "name": "ebgames-queue-watcher",
+  "private": true,
+  "scripts": {
+    "start": "node watcher.js"
+  }
+}

@@ -2,7 +2,7 @@ import { Client, Message, PartialMessage, PresenceStatusData, TextChannel } from
 import { Database } from "duckdb";
 import { Config } from "./config";
 import { Mirror, MirrorConfig } from "./mirror";
-import { ToymateTrigger } from "./toymate-trigger";
+import { EbGamesTrigger, ToymateTrigger } from "./toymate-trigger";
 import { isDirectMessage, isEmptyMessage, isSystemMessage, isVisibleOnlyByClient } from "./utils";
 
 type ChannelId = string;
@@ -10,13 +10,13 @@ type ChannelId = string;
 export class MirrorClient extends Client {
    private config: Config;
    private mirrorChannels: Map<ChannelId, Mirror> = new Map();
-   private toymateTrigger: ToymateTrigger;
+   private queueTriggers: (ToymateTrigger | EbGamesTrigger)[];
 
    public constructor(config: Config, db: Database) {
       super({checkUpdate: false});
       this.config = config;
       this.loadMirrors();
-      this.toymateTrigger = new ToymateTrigger(config);
+      this.queueTriggers = [new ToymateTrigger(config), new EbGamesTrigger(config)];
 
       this.on("ready", () => this.onReady());
       this.on("messageCreate", (message) => this.onMessageCreate(message, db));
@@ -29,13 +29,13 @@ export class MirrorClient extends Client {
    }
 
    private onMessageCreate(message: Message, db: Database): void {
-      this.toymateTrigger.handleMessage(message);
+      for (const trigger of this.queueTriggers) trigger.handleMessage(message);
       this.mirrorMessage(message, db);
    }
 
    private onMessageUpdate(_oldMessage: Message | PartialMessage, newMessage: Message | PartialMessage, db: Database): void {
       if (!newMessage.partial) {
-         this.toymateTrigger.handleMessage(newMessage);
+         for (const trigger of this.queueTriggers) trigger.handleMessage(newMessage);
          this.mirrorMessage(newMessage, db);
       }
    }

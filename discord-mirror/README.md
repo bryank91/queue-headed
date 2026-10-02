@@ -32,7 +32,7 @@ Mirrored message (to server B):\
 The optional `toymateTrigger` block listens for a configured message in a
 configured channel, starts `../toymate/watcher.js`, and sends lifecycle
 updates to the configured Discord webhook channel. It launches the number of
-profiles configured in `toymate/config.yml` (currently 3 by default).
+profiles configured in `toymate/config.yml` (currently 1 by default).
 
 Example:
 
@@ -76,6 +76,15 @@ guards).
 The trigger is disabled by default. `config.yml` is ignored by Git because it
 contains credentials and local settings; use `config.example.yml` as the safe
 template.
+
+## EB Games trigger
+
+`ebGamesTrigger` uses the same matching rules and lifecycle handling, but
+launches `../ebgames/watcher.js` with its own configuration and browser
+profiles. The local EB Games AU V2 alert channel can match the embed title
+`Queue is up!`; no EB Games link needs to appear in that alert. Configure a
+separate channel ID so a Toymate alert cannot start the EB Games watcher.
+See `config.example.yml` and `../ebgames/README.md` for setup.
 
 # Configuration guide
 Each option in `config.yml` is either self explanatory or has a comment above describing it:

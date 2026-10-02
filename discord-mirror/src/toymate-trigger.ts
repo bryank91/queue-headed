@@ -1,15 +1,15 @@
 import { ChildProcess, fork } from "child_process";
 import path from "path";
 import { Message, WebhookClient } from "discord.js-selfbot-v13";
-import { Config, ToymateNotificationConfig, ToymateTriggerConfig } from "./config";
+import { Config, QueueNotificationConfig, QueueTriggerConfig, ToymateTriggerConfig } from "./config";
 
-interface ToymateStatus {
+interface QueueStatus {
    source?: string;
    type?: string;
    [key: string]: unknown;
 }
 
-export interface ToymateTriggerMessage {
+export interface QueueTriggerMessage {
    channelId: string;
    authorId: string;
    content: string;
@@ -17,7 +17,7 @@ export interface ToymateTriggerMessage {
    embedText?: string[];
 }
 
-export function matchesToymateTrigger(message: ToymateTriggerMessage, settings: ToymateTriggerConfig): boolean {
+export function matchesQueueTrigger(message: QueueTriggerMessage, settings: QueueTriggerConfig): boolean {
    const channelIds = settings.channelIds ?? [];
    if (!channelIds.includes(message.channelId)) return false;
 
@@ -36,22 +36,29 @@ export function matchesToymateTrigger(message: ToymateTriggerMessage, settings: 
       try {
          return new RegExp(settings.regex, "i").test(searchableText);
       } catch (error) {
-         console.error("[Toymate] Invalid trigger regex in YAML:", error);
+         console.error("Invalid queue trigger regex in YAML:", error);
       }
    }
 
    return false;
 }
 
-export class ToymateTrigger {
-   private readonly settings: ToymateTriggerConfig;
-   private readonly notifications: ToymateNotificationConfig;
+export const matchesToymateTrigger = matchesQueueTrigger;
+export type ToymateTriggerMessage = QueueTriggerMessage;
+
+class QueueTrigger {
+   private readonly notifications: QueueNotificationConfig;
    private readonly webhooks: WebhookClient[];
    private watcher: ChildProcess | null = null;
    private lastTriggeredAt = 0;
 
-   public constructor(private readonly config: Config) {
-      this.settings = config.getToymateTrigger();
+   public constructor(
+      private readonly config: Config,
+      private readonly settings: QueueTriggerConfig,
+      private readonly name: string,
+      private readonly source: string,
+      private readonly configEnvName: string,
+   ) {
       this.notifications = this.settings.notifications ?? {};
       this.webhooks = (this.notifications.webhookUrls ?? [])
          .filter(Boolean)
@@ -64,13 +71,13 @@ export class ToymateTrigger {
       }
 
       if (this.isRunning()) {
-         console.log("[Toymate] Trigger ignored because a watcher is already running.");
+         console.log(`[${this.name}] Trigger ignored because a watcher is already running.`);
          return;
       }
 
       const cooldownMs = Math.max(0, this.settings.cooldownSeconds ?? 0) * 1000;
       if (Date.now() - this.lastTriggeredAt < cooldownMs) {
-         console.log("[Toymate] Trigger ignored because the cooldown is active.");
+         console.log(`[${this.name}] Trigger ignored because the cooldown is active.`);
          return;
       }
 
@@ -90,7 +97,7 @@ export class ToymateTrigger {
             if (field.value) embedText.push(field.value);
          }
       }
-      return matchesToymateTrigger({
+      return matchesQueueTrigger({
          channelId: message.channelId,
          authorId: message.author.id,
          content: message.content,
@@ -108,7 +115,7 @@ export class ToymateTrigger {
       const watcherConfigPath = this.resolvePath(this.settings.watcherConfigPath);
       const workingDirectory = this.resolvePath(this.settings.workingDirectory ?? path.dirname(watcherPath));
 
-      console.log("[Toymate] Starting watcher:", watcherPath);
+      console.log(`[${this.name}] Starting watcher:`, watcherPath);
 
       let child: ChildProcess;
       try {
@@ -116,12 +123,13 @@ export class ToymateTrigger {
             cwd: workingDirectory,
             env: {
                ...process.env,
-               TOYMATE_CONFIG_PATH: watcherConfigPath,
+               [this.configEnvName]: watcherConfigPath,
+               QUEUE_CONFIG_PATH: watcherConfigPath,
             },
             stdio: ["ignore", "pipe", "pipe", "ipc"],
          });
       } catch (error) {
-         console.error("[Toymate] Failed to start watcher:", error);
+         console.error(`[${this.name}] Failed to start watcher:`, error);
          void this.postError(String(error));
          return;
       }
@@ -129,9 +137,9 @@ export class ToymateTrigger {
       this.watcher = child;
       let childReportedError = false;
 
-      child.stdout?.on("data", (data: Buffer) => process.stdout.write(`[Toymate] ${data}`));
-      child.stderr?.on("data", (data: Buffer) => process.stderr.write(`[Toymate] ${data}`));
-      child.on("message", (status: ToymateStatus) => {
+      child.stdout?.on("data", (data: Buffer) => process.stdout.write(`[${this.name}] ${data}`));
+      child.stderr?.on("data", (data: Buffer) => process.stderr.write(`[${this.name}] ${data}`));
+      child.on("message", (status: QueueStatus) => {
          if (status?.type === "error") childReportedError = true;
          void this.handleStatus(status);
       });
@@ -147,28 +155,28 @@ export class ToymateTrigger {
       });
    }
 
-   private async handleStatus(status: ToymateStatus): Promise<void> {
-      if (!status || status.source !== "toymate") return;
+   private async handleStatus(status: QueueStatus): Promise<void> {
+      if (!status || status.source !== this.source) return;
 
       switch (status.type) {
          case "started":
             if (this.notifications.postStarted !== false) {
-               await this.post(`🟡 Toymate watcher started with ${status.profiles ?? "configured"} profile(s).`);
+               await this.post(`🟡 ${this.name} watcher started with ${status.profiles ?? "configured"} profile(s).`);
             }
             break;
          case "waiting_room":
             if (this.notifications.postWaitingRoom) {
-               await this.post(`⏳ Toymate profile ${status.profile ?? "?"}/${status.total ?? "?"} entered the Cloudflare queue.`);
+               await this.post(`⏳ ${this.name} profile ${status.profile ?? "?"}/${status.total ?? "?"} entered the queue.`);
             }
             break;
          case "cleared":
             if (this.notifications.postCleared !== false) {
-               await this.post(`✅ Toymate queue cleared — profile ${status.profile ?? "?"}/${status.total ?? "?"} is through.`);
+               await this.post(`✅ ${this.name} queue cleared — profile ${status.profile ?? "?"}/${status.total ?? "?"} is through.`);
             }
             break;
          case "stopped":
             if (this.notifications.postStopped !== false) {
-               await this.post(`ℹ️ Toymate watcher stopped (${status.reason ?? "complete"}).`);
+               await this.post(`ℹ️ ${this.name} watcher stopped (${status.reason ?? "complete"}).`);
             }
             break;
          case "error":
@@ -179,7 +187,7 @@ export class ToymateTrigger {
 
    private async postError(message: string): Promise<void> {
       if (this.notifications.postErrors !== false) {
-         await this.post(`⚠️ Toymate watcher error: ${message}`);
+         await this.post(`⚠️ ${this.name} watcher error: ${message}`);
       }
    }
 
@@ -187,17 +195,29 @@ export class ToymateTrigger {
       if (!this.notifications.enabled || !this.webhooks.length) return;
       await Promise.all(this.webhooks.map((webhook) =>
          webhook.send({ content }).catch((error) => {
-            console.error("[Toymate] Failed to send Discord notification:", error.message);
+            console.error(`[${this.name}] Failed to send Discord notification:`, error.message);
          })
       ));
    }
 
    private resolvePath(configuredPath: string | undefined): string {
       if (!configuredPath) {
-         throw new Error("Toymate trigger path is missing from YAML config.");
+         throw new Error(`${this.name} trigger path is missing from YAML config.`);
       }
       return path.isAbsolute(configuredPath)
          ? configuredPath
          : path.resolve(this.config.getConfigDirectory(), configuredPath);
+   }
+}
+
+export class ToymateTrigger extends QueueTrigger {
+   public constructor(config: Config) {
+      super(config, config.getToymateTrigger(), "Toymate", "toymate", "TOYMATE_CONFIG_PATH");
+   }
+}
+
+export class EbGamesTrigger extends QueueTrigger {
+   public constructor(config: Config) {
+      super(config, config.getEbGamesTrigger(), "EB Games", "ebgames", "QUEUE_CONFIG_PATH");
    }
 }

@@ -162,6 +162,8 @@ function stopServer() {
     channel:              MODE_CONFIG[MODE].channel,
     headless:             MODE_CONFIG[MODE].headless,
     suppressWhenChromeFocused: true,
+    notifyOnBrowserOpen: true,
+    siteName:             'Toymate',
     notifySubtitle:       'queue-headed-test',
     stateChangeHook: (state, url, title) => {
       const elapsed = ((Date.now() - serverStart) / 1000).toFixed(1);
@@ -201,6 +203,7 @@ function stopServer() {
   }
 
   const gateClearedNotif = notifications.find(n => /gate cleared/i.test(n.title));
+  const browserOpenNotifs = notifications.filter(n => /alert received/i.test(n.title));
 
   assert('saw WAITING_ROOM state at least once',          sawWaitingRoom);
   assert('saw THROUGH state at least once',               sawThrough);
@@ -210,12 +213,14 @@ function stopServer() {
          stateTransitions[stateTransitions.length - 1].state === 'THROUGH',
          `got "${stateTransitions[stateTransitions.length - 1].state}"`);
   assert('received gate-cleared notification',            !!gateClearedNotif);
+  assert('one browser-open notification fired',
+         browserOpenNotifs.length === 1 && browserOpenNotifs[0].opts.force === true,
+         `got ${browserOpenNotifs.length}`);
   assert('exactly one gate-cleared notification fired',
          notifications.filter(n => /gate cleared/i.test(n.title)).length === 1,
          `got ${notifications.filter(n => /gate cleared/i.test(n.title)).length}`);
-  assert('no notifications fired while page was still WR',
-         notifications.length === 0 || /gate cleared/i.test(notifications[0].title),
-         `first notification: "${notifications[0] && notifications[0].title}"`);
+  assert('browser-open notification preceded the queue clear',
+         browserOpenNotifs[0] && gateClearedNotif && browserOpenNotifs[0].time < gateClearedNotif.time);
   assert('THROUGH transition came AFTER server switched content (≥ 4s)',
          stateTransitions.find(t => t.state === 'THROUGH') &&
          (stateTransitions.find(t => t.state === 'THROUGH').time - serverStart) >= WR_DURATION_MS,

@@ -4,9 +4,9 @@
 > Runtime settings are stored in `config.yml`, which is intentionally ignored
 > because it is local configuration. Copy `config.example.yml` to create it.
 
-Multi-profile **headed-browser** watcher that holds N Cloudflare Waiting Room
-queue tickets for Toymate in parallel and notifies you on macOS the moment
-you clear the gate.
+Headed-browser watcher that holds a Cloudflare Waiting Room ticket for Toymate.
+The default is one Chrome profile. It notifies you when the browser opens and
+when that profile clears a queue it actually entered.
 
 > For the full end-to-end setup (including the Discord auto-trigger that
 > starts this watcher when a Toymate link appears), see the
@@ -20,16 +20,18 @@ cd queue-headed/toymate
 npm install
 npx playwright install chromium
 cp config.example.yml config.yml
-npm start                  # launches the configured parallel Chrome instances
+npm start                  # launches the configured Chrome profile
 ```
 
-When a profile clears the gate you'll get a labelled macOS notification:
+When the watcher opens Chrome, you'll get a macOS notification saying the alert
+was received and the waiting-room status is being checked. If the profile later
+clears a queue, you'll get a second notification:
 
-> `[Profile 2/3] ✅ gate cleared` — You're past the Cloudflare queue.
+> `[Profile 1/1] ✅ gate cleared` — You're past the Cloudflare queue.
 
-Notifications are **auto-suppressed when Google Chrome is the frontmost app** —
-if you're already looking at the browser, you can see the page state yourself
-and don't need a ping.
+The browser-open notification always fires. The gate-cleared notification is
+suppressed when Google Chrome is the frontmost app, since you're already
+looking at the browser.
 
 ## What it watches
 
@@ -37,7 +39,7 @@ and don't need a ping.
 |---|---|
 | **Cloudflare Waiting Room** | Detects the "Waiting Room powered by Cloudflare" page, waits for Cloudflare to redirect you to Toymate's real site. |
 
-The detection regexes live in `STATES` in `watcher.js`. They're generic
+The detection regexes live in `state.js`. They're generic
 Cloudflare WR strings, but Toymate-specific markup changes (e.g. Cloudflare
 rewording "in line") could break them.
 
@@ -47,11 +49,13 @@ Copy `config.example.yml` to `config.yml` and edit the YAML:
 
 ```yaml
 toymate:
+  siteName: "Toymate"
   startUrl: "https://toymate.com.au/"
-  profileCount: 3
+  profileCount: 1
   profileBaseDir: "profiles"
   pollIntervalMs: 4000
   suppressWhenChromeFocused: true
+  notifyOnBrowserOpen: true
   maxRuntimeMs: 0
   openOnClear: true
   closeOthersOnClear: true
@@ -93,27 +97,26 @@ TEST_MODE=headed npm run test:e2e           # real headed Chromium (~47s, needs 
 
 ## What it'll notify you about
 
-**One event only.** Everything else (entering a queue, periodic waiting) is
-silent — you see it on the browser window.
+There are two notification events. Entering a waiting room and periodic waiting
+are silent; you can see them in the browser.
 
 | Event | Notification |
 |---|---|
+| Browser opened after an alert | `Toymate alert received` — checks are starting; this does not confirm a waiting room |
 | Cleared the gate | `[Profile N/M] ✅ gate cleared` + opens page |
 
 ## Heads up
 
 - Cloudflare **forbids automation** in their Terms of Service. They can void
   entries or ban accounts.
-- Multi-profile is unambiguously against the spirit of a fair queue. N tickets
-  = N× odds. Use responsibly.
-- 3 Chrome instances ≈ 1–2 GB RAM and noticeable CPU. Drop `profileCount`
-  if your Mac struggles.
+- The default is one Chrome profile. Raising `profileCount` opens more windows
+  and uses more memory.
 - If you see a CAPTCHA in any Chrome window, solve it manually; the watcher
   keeps going once the page clears.
 - The "is Chrome frontmost?" check uses AppleScript + System Events. If
   macOS prompts you for **Accessibility** permission for your terminal,
-  grant it. Without it, notifications will fire even when you're at the
-  browser. Re-run `npm run test:focus` after granting permission to verify.
+  grant it. Without it, gate-cleared notifications will fire even when you're
+  at the browser. Re-run `npm run test:focus` after granting permission to verify.
 
 ## Files
 

@@ -3,7 +3,7 @@ import path from "path";
 import yaml from "yaml";
 import { MirrorConfig } from "./mirror";
 
-export interface ToymateNotificationConfig {
+export interface QueueNotificationConfig {
    enabled?: boolean;
    webhookUrls?: string[];
    postStarted?: boolean;
@@ -13,7 +13,7 @@ export interface ToymateNotificationConfig {
    postErrors?: boolean;
 }
 
-export interface ToymateTriggerConfig {
+export interface QueueTriggerConfig {
    enabled?: boolean;
    channelIds?: string[];
    authorIds?: string[];
@@ -24,8 +24,11 @@ export interface ToymateTriggerConfig {
    watcherPath?: string;
    watcherConfigPath?: string;
    workingDirectory?: string;
-   notifications?: ToymateNotificationConfig;
+   notifications?: QueueNotificationConfig;
 }
+
+export type ToymateNotificationConfig = QueueNotificationConfig;
+export type ToymateTriggerConfig = QueueTriggerConfig;
 
 export class Config {
    private configPath: string;
@@ -34,7 +37,8 @@ export class Config {
    private logMessage: string;
    private db: string
    private mirrors: MirrorConfig[] = [];
-   private toymateTrigger: ToymateTriggerConfig;
+   private toymateTrigger: QueueTriggerConfig;
+   private ebGamesTrigger: QueueTriggerConfig;
 
    public constructor(filePath: string) {
       this.configPath = path.resolve(filePath);
@@ -51,6 +55,7 @@ export class Config {
          this.mirrors.push(mirror);
       }
       this.toymateTrigger = config.toymateTrigger ?? {};
+      this.ebGamesTrigger = config.ebGamesTrigger ?? {};
    }
 
    public getToken(): string {
@@ -79,5 +84,9 @@ export class Config {
 
    public getToymateTrigger(): ToymateTriggerConfig {
       return this.toymateTrigger;
+   }
+
+   public getEbGamesTrigger(): QueueTriggerConfig {
+      return this.ebGamesTrigger;
    }
 }

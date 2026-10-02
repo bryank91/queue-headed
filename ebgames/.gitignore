@@ -1,0 +1,6 @@
+node_modules/
+profiles/
+config.yml
+*.log
+.DS_Store
+*.swp

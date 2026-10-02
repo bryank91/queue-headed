@@ -1,8 +1,8 @@
-# Copy to config.yml for local use.
-
-toymate:
-  siteName: "Toymate"
-  startUrl: "https://toymate.com.au/"
+# Copy to config.yml. EB Games uses separate browser profiles from Toymate.
+queue:
+  statusSource: "ebgames"
+  siteName: "EB Games"
+  startUrl: "https://www.ebgames.com.au/"
   profileCount: 1
   profileBaseDir: "profiles"
   pollIntervalMs: 4000
@@ -11,11 +11,11 @@ toymate:
   maxRuntimeMs: 0
   openOnClear: true
   closeOthersOnClear: true
-  notifySubtitle: "Toymate Queue Watcher"
+  notifySubtitle: "EB Games Queue Watcher"
   verbose: true
   browser:
     channel: "chrome"
     headless: false
     locale: "en-AU"
-    timezoneId: "Australia/Sydney"
+    timezoneId: "Australia/Perth"
     acceptLanguage: "en-AU,en;q=0.9"
